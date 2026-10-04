@@ -1,0 +1,11 @@
+# Local environment secrets
+discord.env
+.env
+
+# Python virtual environments and generated files
+.venv/
+__pycache__/
+*.py[cod]
+
+# Bot runtime log
+discord.log
