@@ -8,6 +8,7 @@ import csv
 from datetime import datetime
 import pytz
 from email.utils import parsedate_to_datetime
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # Load the bot token from the project's environment file.
 load_dotenv("discord.env")
@@ -24,13 +25,24 @@ daily_update_hour = 21
 daily_update_minute = 14
 last_daily_date = None
 
+def normalize_url(url):
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    filtered_query = [(key, value) for key, value in query if not key.lower().startswith('utm_')]
+    normalized_query = urlencode(filtered_query, doseq=True)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, normalized_query, ''))
+
+
 def checkIsExist(link):
+    normalized_link = normalize_url(link)
     with open('rss_log.csv', 'r', encoding='utf-8') as file:
         reader = csv.reader(file)
         for row in reader:
-            if len(row) > 1 and link == row[1]:
+            if len(row) > 1 and normalize_url(row[1]) == normalized_link:
                 return False
-    return True 
+    return True
 
 def checkList(rss_url):
     with open('rss_list.csv', 'r', encoding='utf-8') as file:
@@ -53,48 +65,58 @@ async def get_rss_channel(channel_id: int):
 async def update_rss():
     any_new = False
     destination_channels = {}
+    seen_in_run = set()
     with open('rss_list.csv', 'r', encoding='utf-8') as file:
         reader = csv.reader(file)
         for row in reader:
-            if len(row) < 2:
-                print(f"Skipping RSS row without a channel ID: {row}")
-                continue
-
             try:
-                channel_id = int(row[1])
-            except ValueError:
-                print(f"Skipping RSS row with an invalid channel ID: {row}")
-                continue
+                if len(row) < 2:
+                    print(f"Skipping RSS row without a channel ID: {row}")
+                    continue
 
-            channel = destination_channels.get(channel_id)
-            if channel is None:
-                channel = await get_rss_channel(channel_id)
+                try:
+                    channel_id = int(row[1])
+                except ValueError:
+                    print(f"Skipping RSS row with an invalid channel ID: {row}")
+                    continue
+
+                channel = destination_channels.get(channel_id)
                 if channel is None:
-                    print(f"Channel {channel_id} not found")
-                    continue
-                destination_channels[channel_id] = channel
+                    channel = await get_rss_channel(channel_id)
+                    if channel is None:
+                        print(f"Channel {channel_id} not found")
+                        continue
+                    destination_channels[channel_id] = channel
 
-            feed = feedparser.parse(row[0])
-            for entry in feed.entries:
-                if "/shorts/" in entry.link:
-                    continue
-                if checkIsExist(entry.link):
-                    any_new = True
-                    parsed_date = parsedate_to_datetime(entry.published)
-                    formatted_date = parsed_date.strftime("%H:%M %d-%m-%Y")
+                feed = feedparser.parse(row[0])
+                for entry in feed.entries:
+                    entry_link = entry.get("link")
+                    if not entry_link or "/shorts/" in entry_link:
+                        continue
 
-                    title = entry.get("title", "No title")
-                    link = entry.get("link", "No link")
-                    author = entry.get("author", "unknown author")
+                    normalized_link = normalize_url(entry_link)
+                    if not normalized_link or normalized_link in seen_in_run:
+                        continue
 
-                    message = f"{title}\n{link}\n{author}\n{formatted_date}"
+                    if checkIsExist(entry_link):
+                        any_new = True
+                        seen_in_run.add(normalized_link)
+                        parsed_date = parsedate_to_datetime(entry.published)
+                        formatted_date = parsed_date.strftime("%H:%M %d-%m-%Y")
 
-                    await channel.send(message)
+                        title = entry.get("title", "No title")
+                        link = entry.get("link", "No link")
+                        author = entry.get("author", "unknown author")
 
-                    with open('rss_log.csv', 'a', newline='', encoding='utf-8') as file:
-                        writer = csv.writer(file)
-                        writer.writerow([entry.title, entry.link, entry.author, formatted_date])
+                        message = f"{title}\n{link}\n{author}\n{formatted_date}"
 
+                        await channel.send(message)
+
+                        with open('rss_log.csv', 'a', newline='', encoding='utf-8') as file:
+                            writer = csv.writer(file)
+                            writer.writerow([entry.title, entry.link, entry.author, formatted_date])
+            except:
+                continue
     if not any_new:
         for channel in destination_channels.values():
             await channel.send("Nothing new has been released!")
