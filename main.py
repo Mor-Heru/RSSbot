@@ -7,6 +7,7 @@ import feedparser
 import csv
 from datetime import datetime
 import pytz
+from email.utils import parsedate_to_datetime
 
 # Load the bot token from the project's environment file.
 load_dotenv("discord.env")
@@ -79,10 +80,15 @@ async def update_rss():
                     continue
                 if checkIsExist(entry.link):
                     any_new = True
-                    parsed_date = datetime.fromisoformat(entry.published.replace('Z', '+00:00'))
+                    parsed_date = parsedate_to_datetime(entry.published)
                     formatted_date = parsed_date.strftime("%H:%M %d-%m-%Y")
 
-                    message = f"{entry.title}\n{entry.link}\n{entry.author}\n{formatted_date}"
+                    title = entry.get("title", "No title")
+                    link = entry.get("link", "No link")
+                    author = entry.get("author", "unknown author")
+
+                    message = f"{title}\n{link}\n{author}\n{formatted_date}"
+
                     await channel.send(message)
 
                     with open('rss_log.csv', 'a', newline='', encoding='utf-8') as file:
@@ -126,7 +132,20 @@ async def on_ready():
 
 @bot.command()
 async def update(ctx):
-    await update_rss()
+    print("The !update command was called!")
+
+    await ctx.send("Starting RSS update...")
+
+    try:
+        result = await update_rss()
+        await ctx.send(
+            "RSS update completed."
+            if result
+            else "RSS update completed. No new entries found."
+        )
+    except Exception as e:
+        print(f"Error during RSS update: {e}")
+        await ctx.send(f"An error occurred: {type(e).__name__}: {e}")
 
 @bot.command()
 async def update_settings(ctx):
@@ -208,7 +227,7 @@ async def del_rss(ctx,*, rss_url):
             writer.writerows(rss_rows)
         await ctx.send("RSS deleted!")
     else:
-        await ctx.send("RSS is not exist!")
+        await ctx.send("RSS does not exist!")
 
 @bot.command()
 async def help(ctx):
